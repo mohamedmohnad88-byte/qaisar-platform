@@ -94,11 +94,16 @@ td{padding:8px;border-bottom:1px solid #e2d3b0;text-align:center;font-size:15px}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(30px);background:var(--m);color:var(--g2);border:2px solid var(--g);padding:10px 20px;border-radius:99px;opacity:0;pointer-events:none;transition:.3s;z-index:99;max-width:90%;text-align:center}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 </style>
+
+<!-- Firebase SDKs (v9 Compat) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 </head>
 <body>
 <div id="app"></div>
 <div class="ov" id="ov" hidden><div class="md card"><button class="x" data-act="closeM" aria-label="close">&#10005;</button><div id="mb"></div></div></div>
 <div class="toast" id="toast"></div>
+
 <script>
 window.onerror=function(m,s,l){
   var d=document.createElement('pre');
@@ -107,9 +112,30 @@ window.onerror=function(m,s,l){
   document.body.appendChild(d);
 };
 </script>
+
 <script>
 (function(){
 'use strict';
+
+// ⚙️ إعدادات مشروعك الحقيقية على Firebase (qaisar-we)
+var firebaseConfig = {
+  apiKey: "AIzaSyAymPTwxTbsI7VVu3KA4En43VA2l32DT_c",
+  authDomain: "qaisar-we.firebaseapp.com",
+  databaseURL: "https://qaisar-we-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "qaisar-we",
+  storageBucket: "qaisar-we.firebasestorage.app",
+  messagingSenderId: "407525252124",
+  appId: "1:407525252124:web:e3236467aa93359907d3d9"
+};
+
+var useFirebase = true;
+var rtdb = null;
+try {
+  firebase.initializeApp(firebaseConfig);
+  rtdb = firebase.database();
+} catch(e) {
+  useFirebase = false;
+}
 
 var ADMIN={user:'admin',pass:'Qaisar@2026'};
 var PRICE=40;
@@ -142,35 +168,38 @@ function dayKey(ts){var d=new Date(ts);return d.getFullYear()+'-'+(d.getMonth()+
 var toastTimer=null;
 function toast(m){
   var t=$('#toast');
+  if(!t)return;
   t.textContent=m;t.className='toast on';
   clearTimeout(toastTimer);
   toastTimer=setTimeout(function(){t.className='toast';},2400);
 }
 
-/* ---------- storage ---------- */
-var memStore=null;
-function readRaw(){
-  try{return localStorage.getItem(KEY);}catch(e){return memStore;}
-}
-function writeRaw(v){
-  try{localStorage.setItem(KEY,v);}catch(e){memStore=v;}
-}
 function mkStudent(name,phone,code,bal){
   var s={id:uid(),name:name,phone:phone,code:code,balance:bal||0,note:'',att:[],exams:[],unlocked:[],tx:[]};
   if(bal){s.tx.push({t:bal,note:'رصيد افتتاحي',ts:Date.now()});}
   return s;
 }
-function load(){
-  var d=null;
-  try{d=JSON.parse(readRaw());}catch(e){d=null;}
-  if(!d||typeof d!=='object'){d={};}
-  d.students=Array.isArray(d.students)?d.students:[];
-  d.codes=Array.isArray(d.codes)?d.codes:[];
-  d.videos=Array.isArray(d.videos)?d.videos:[];
-  d.log=Array.isArray(d.log)?d.log:[];
-  d.announce=(d.announce&&typeof d.announce==='object')?d.announce:{text:'',ts:0};
-  d.session=d.session||null;
-  d.students.forEach(function(s){
+
+var db = {students:[], codes:[], videos:[], log:[], announce:{text:'',ts:0}, session:null};
+var memStore=null;
+function readRaw(){try{return localStorage.getItem(KEY);}catch(e){return memStore;}}
+function writeRaw(v){try{localStorage.setItem(KEY,v);}catch(e){memStore=v;}}
+
+function processData(d){
+  if(!d || typeof d !== 'object'){
+    db.students = [mkStudent('طالب تجريبي','01000000000','1001',0)];
+    db.codes = [];
+    db.videos = [];
+    db.log = [];
+    db.announce = {text:'',ts:0};
+  } else {
+    db.students = Array.isArray(d.students)?d.students:[];
+    db.codes = Array.isArray(d.codes)?d.codes:[];
+    db.videos = Array.isArray(d.videos)?d.videos:[];
+    db.log = Array.isArray(d.log)?d.log:[];
+    db.announce = (d.announce&&typeof d.announce==='object')?d.announce:{text:'',ts:0};
+  }
+  db.students.forEach(function(s){
     s.balance=Number(s.balance)||0;
     s.att=Array.isArray(s.att)?s.att:[];
     s.exams=Array.isArray(s.exams)?s.exams:[];
@@ -178,16 +207,50 @@ function load(){
     s.tx=Array.isArray(s.tx)?s.tx:[];
     s.note=s.note||'';
   });
-  if(!d.seeded){
-    d.seeded=true;
-    d.students.push(mkStudent('طالب تجريبي','01000000000','1001',0));
-  }
-  return d;
+  render();
+  refreshPane();
 }
-var db=load();
+
+var sessionBackup = null;
 function save(){
-  try{writeRaw(JSON.stringify(db));}catch(e){toast('تعذر الحفظ');}
+  sessionBackup = db.session;
+  var dataToSave = {
+    students: db.students,
+    codes: db.codes,
+    videos: db.videos,
+    log: db.log,
+    announce: db.announce
+  };
+  if(useFirebase && rtdb){
+    rtdb.ref('qaisar_data').set(dataToSave).catch(function(e){
+      writeRaw(JSON.stringify(dataToSave));
+    });
+  } else {
+    writeRaw(JSON.stringify(dataToSave));
+  }
 }
+
+// الاتصال اللحظي بـ Firebase لضمان مزامنة البيانات بين جميع الموبايلات
+if(useFirebase && rtdb){
+  rtdb.ref('qaisar_data').on('value', function(snapshot){
+    var d = snapshot.val();
+    if(!d){
+      processData(null);
+      save();
+    } else {
+      processData(d);
+    }
+  }, function(error){
+    var localData = null;
+    try{ localData = JSON.parse(readRaw()); }catch(e){}
+    processData(localData);
+  });
+} else {
+  var localData = null;
+  try{ localData = JSON.parse(readRaw()); }catch(e){}
+  processData(localData);
+}
+
 function addLog(t){
   db.log.push({text:t,ts:Date.now()});
   if(db.log.length>100){db.log=db.log.slice(-100);}
@@ -254,15 +317,14 @@ function nextCode(){
   return String(n);
 }
 
-/* ---------- state ---------- */
 var app=$('#app');
 var adminMode=false,taps=0,lastTap=0,tab='dash',q='',fails=0,lockUntil=0;
 
 function openModal(h){$('#mb').innerHTML=h;$('#ov').hidden=false;}
 function closeModal(){$('#ov').hidden=true;$('#mb').innerHTML='';}
 
-/* ---------- views ---------- */
 function render(){
+  if(!app) return;
   var s=db.session;
   if(s&&s.role==='admin'){app.innerHTML=adminView();return;}
   if(s&&s.role==='student'){
@@ -343,336 +405,7 @@ function studentView(s){
   return h+'</main>';
 }
 
-/* ---------- admin ---------- */
 function adminView(){
   var tabs=[['dash','📊 الإحصائيات'],['stu','👥 الطلاب'],['att','🗓 الحضور'],['code','🎟 الأكواد'],['vid','🎬 الفيديوهات'],['ann','📢 الإعلانات']];
   return topbar('لوحة الإدارة — المشرف: '+esc(db.session.sup))+
-    '<div class="wrap"><nav class="tabs">'+
-    tabs.map(function(t){return '<button data-act="tab" data-t="'+t[0]+'" class="'+(tab===t[0]?'on':'')+'">'+t[1]+'</button>';}).join('')+
-    '</nav><div id="pane">'+pane()+'</div></div>';
-}
-function pane(){
-  switch(tab){
-    case 'stu':return paneStu();
-    case 'att':return paneAtt();
-    case 'code':return paneCode();
-    case 'vid':return paneVid();
-    case 'ann':return paneAnn();
-    default:return paneDash();
-  }
-}
-function stat(i,l,v){return '<div class="card stat"><i>'+i+'</i><b>'+v+'</b><span>'+l+'</span></div>';}
-function paneDash(){
-  var tot=db.students.reduce(function(a,s){return a+s.balance;},0);
-  var av=db.codes.filter(function(c){return !c.used;}).length;
-  var pr=db.students.filter(isPresent).length;
-  var lg=db.log.slice(-8).reverse().map(function(l){return '<li>'+esc(l.text)+' <small>'+fmt(l.ts)+'</small></li>';}).join('')||'<li class="mut">لا يوجد نشاط بعد</li>';
-  return '<div class="g">'+
-    stat('👥','إجمالي الطلاب',db.students.length)+
-    stat('💰','إجمالي أرصدة المحافظ',tot+' ج.م')+
-    stat('🎟','أكواد شحن متاحة',av)+
-    stat('🎬','فيديوهات منشورة',db.videos.length)+
-    stat('✅','حاضرون حاليا',pr)+
-    stat('♻️','أكواد مستخدمة',db.codes.length-av)+
-    '</div><section class="card"><div class="h">آخر النشاطات</div><ul class="lg">'+lg+'</ul></section>';
-}
-function filt(){
-  var raw=q.trim().toLowerCase();
-  var k=norm(q).toLowerCase();
-  return db.students.filter(function(s){
-    return !raw||s.name.toLowerCase().indexOf(raw)>-1||s.code.toLowerCase().indexOf(k)>-1||s.phone.indexOf(k)>-1;
-  });
-}
-function rows(){
-  var l=filt();
-  if(!l.length){return '<div class="card empty">لا يوجد طلاب مطابقون</div>';}
-  return l.map(function(s){
-    if(tab==='att'){
-      var la=lastAtt(s);
-      return '<div class="card r2"><div class="who"><b>'+esc(s.name)+'</b><small>كود: '+esc(s.code)+(la?' · آخر تسجيل: '+fmt(la.ts)+' بواسطة '+esc(la.by):'')+'</small></div>'+badge(s)+
-        '<div class="acts"><button class="btn green sm" data-act="mark" data-id="'+s.id+'" data-st="present">حاضر ✓</button>'+
-        '<button class="btn red sm" data-act="mark" data-id="'+s.id+'" data-st="absent">غائب ✕</button></div></div>';
-    }
-    return '<div class="card r2"><div class="who"><b>'+esc(s.name)+'</b><small>كود: '+esc(s.code)+' · 📞 '+esc(s.phone)+'</small>'+
-      (s.note?'<small class="nt">📝 '+esc(s.note)+'</small>':'')+'</div>'+badge(s)+
-      '<div class="bal">'+s.balance+' ج.م</div>'+
-      '<div class="acts"><button class="btn sm" data-act="manage" data-id="'+s.id+'">⚙ إدارة</button>'+
-      '<button class="btn red sm" data-act="delStu" data-id="'+s.id+'">🗑 حذف</button></div></div>';
-  }).join('');
-}
-function searchBar(extra){
-  return '<div class="card"><div class="row">'+
-    '<input class="in" id="sq" placeholder="ابحث بالاسم أو الكود أو الموبايل" value="'+esc(q)+'" autocomplete="off">'+
-    extra+'</div></div>';
-}
-function paneStu(){
-  return searchBar('<button class="btn gold" data-act="addStu">➕ طالب جديد</button>')+'<div id="slist">'+rows()+'</div>';
-}
-function paneAtt(){
-  var all=[];
-  db.students.forEach(function(s){s.att.forEach(function(r){all.push({n:s.name,r:r});});});
-  all.sort(function(a,b){return b.r.ts-a.r.ts;});
-  all=all.slice(0,40);
-  var tb=all.map(function(x){
-    return '<tr><td>'+esc(x.n)+'</td><td><span class="bd '+(x.r.status==='present'?'ok':'no')+'">'+(x.r.status==='present'?'حاضر':'غائب')+'</span></td><td>'+esc(x.r.by)+'</td><td>'+fmt(x.r.ts)+'</td></tr>';
-  }).join('')||'<tr><td colspan="4">لا توجد سجلات</td></tr>';
-  return searchBar('')+'<div id="slist">'+rows()+'</div>'+
-    '<section class="card"><div class="h">سجل الحضور والغياب (آخر 40)</div><div class="scroll"><table><tr><th>الطالب</th><th>الحالة</th><th>المشرف</th><th>الوقت</th></tr>'+tb+'</table></div></section>';
-}
-function paneCode(){
-  var av=db.codes.filter(function(c){return !c.used;}).length;
-  var l=db.codes.slice().sort(function(a,b){return ((a.used?1:0)-(b.used?1:0))||(b.ts-a.ts);});
-  var tb=l.map(function(c){
-    return '<tr><td dir="ltr" class="mono">'+esc(c.code)+'</td><td>'+(c.used?'<span class="bd no">مستخدم</span>':'<span class="bd ok">متاح</span>')+'</td><td>'+
-      (c.used?esc(c.by)+'<br><small>'+fmt(c.usedAt)+'</small>':'—')+'</td><td>'+
-      (c.used?'':'<button class="btn sm" data-act="copy" data-v="'+esc(c.code)+'">نسخ</button>')+'</td></tr>';
-  }).join('')||'<tr><td colspan="4">لا توجد أكواد</td></tr>';
-  return '<section class="card"><div class="h">مولّد أكواد الشحن ('+PRICE+' ج.م للكود)</div><div class="row">'+
-    '<input class="in" id="cn" type="number" min="1" max="50" value="1" style="max-width:100px">'+
-    '<button class="btn gold" data-act="genCodes">⚡ توليد كود</button>'+
-    '<button class="btn sm" data-act="copyAll">نسخ كل المتاح ('+av+')</button></div></section>'+
-    '<section class="card"><div class="h">جدول الأكواد</div><div class="scroll"><table><tr><th>الكود</th><th>الحالة</th><th>استخدمه</th><th></th></tr>'+tb+'</table></div></section>';
-}
-function paneVid(){
-  var l=db.videos.slice().reverse().map(function(v){
-    return '<div class="card r2"><div class="who"><b>🎬 '+esc(v.title)+'</b><small>'+fmt(v.ts)+'</small></div><div class="acts">'+
-      '<button class="btn sm" data-act="play" data-id="'+v.id+'">معاينة</button>'+
-      '<button class="btn red sm" data-act="delVid" data-id="'+v.id+'">🗑 حذف</button></div></div>';
-  }).join('')||'<div class="card empty">لا توجد فيديوهات منشورة</div>';
-  return '<section class="card"><div class="h">نشر محاضرة جديدة</div><form data-form="addVid" autocomplete="off">'+
-    '<label>عنوان المحاضرة</label><input class="in" name="ft" required>'+
-    '<label>رابط الفيديو (يوتيوب / mp4 / كود iframe)</label><textarea class="in" name="fl" dir="ltr" required></textarea>'+
-    '<button type="button" data-act="submitForm" class="btn gold full">نشر المحاضرة</button></form></section>'+l;
-}
-function paneAnn(){
-  return '<section class="card"><div class="h">إعلان عام لكل الطلاب</div>'+
-    '<textarea class="in" id="at" maxlength="500" placeholder="اكتب نص الإعلان هنا...">'+esc(db.announce.text)+'</textarea>'+
-    '<div class="row" style="margin-top:10px"><button class="btn gold" data-act="pubAnn">📢 نشر الإعلان</button>'+
-    '<button class="btn red" data-act="clrAnn">إزالة الإعلان</button></div>'+
-    (db.announce.text?'<p class="mut" style="margin-top:8px">منشور منذ: '+fmt(db.announce.ts)+'</p>':'')+'</section>';
-}
-
-/* ---------- modals ---------- */
-function modalAddStu(){
-  openModal('<h3 class="h">إضافة طالب جديد</h3><form data-form="addStu" autocomplete="off">'+
-    '<label>اسم الطالب</label><input class="in" name="fn" required>'+
-    '<label>رقم الموبايل</label><input class="in" name="fp" inputmode="tel" required>'+
-    '<label>الكود (اتركه فارغا للتوليد التلقائي)</label><input class="in" name="fc">'+
-    '<label>رصيد افتتاحي (اختياري)</label><input class="in" name="fb" type="number" min="0" step="1">'+
-    '<button type="button" data-act="submitForm" class="btn gold full">إضافة الطالب</button></form>');
-}
-function manage(id){
-  var s=byId(id);
-  if(!s){return;}
-  var ex=s.exams.slice().reverse().map(function(e){
-    return '<li><b>'+esc(e.title)+'</b>: '+e.score+' / '+e.max+' <button class="btn red sm" data-act="delExam" data-id="'+s.id+'" data-e="'+e.id+'">✕</button></li>';
-  }).join('')||'<li class="mut">لا توجد اختبارات</li>';
-  openModal('<h3 class="h">⚙ '+esc(s.name)+'</h3><p><b>الرصيد الحالي: '+s.balance+' ج.م</b></p>'+
-    '<label>تعديل الرصيد</label><div class="row"><input class="in" id="amt" type="number" min="1" step="1" placeholder="المبلغ">'+
-    '<button class="btn green sm" data-act="adj" data-id="'+s.id+'" data-s="1">+ إضافة</button>'+
-    '<button class="btn red sm" data-act="adj" data-id="'+s.id+'" data-s="-1">− خصم</button></div>'+
-    '<label>ملاحظة خاصة / تحذير (للإدارة فقط)</label><textarea class="in" id="nt" maxlength="300">'+esc(s.note)+'</textarea>'+
-    '<button class="btn sm" style="margin-top:6px" data-act="saveNote" data-id="'+s.id+'">حفظ الملاحظة</button>'+
-    '<label>إضافة درجة اختبار</label><div class="row"><input class="in" id="et" placeholder="اسم الاختبار">'+
-    '<input class="in" id="es" type="number" min="0" placeholder="الدرجة" style="max-width:90px">'+
-    '<input class="in" id="em" type="number" min="1" value="100" style="max-width:90px"></div>'+
-    '<button class="btn sm" style="margin-top:6px" data-act="addExam" data-id="'+s.id+'">إضافة الدرجة</button>'+
-    '<ul class="lg" style="margin-top:8px">'+ex+'</ul>');
-}
-
-/* ---------- actions ---------- */
-function act(a,el){
-  var id=el.getAttribute('data-id'),s,v,n;
-  switch(a){
-    case 'submitForm':{
-      var ff=el.closest('form');
-      if(ff&&forms[ff.getAttribute('data-form')]){forms[ff.getAttribute('data-form')](ff);}
-      break;}
-    case 'crest':
-      n=Date.now();
-      if(n-lastTap>1500){taps=0;}
-      lastTap=n;taps++;
-      if(taps>=3){taps=0;adminMode=true;render();}
-      break;
-    case 'studentMode':adminMode=false;render();break;
-    case 'logout':db.session=null;save();adminMode=false;tab='dash';q='';render();break;
-    case 'closeM':closeModal();break;
-    case 'tab':tab=el.getAttribute('data-t');q='';render();break;
-    case 'addStu':modalAddStu();break;
-    case 'manage':manage(id);break;
-    case 'adj':
-      s=byId(id);if(!s){break;}
-      n=Math.floor(Number($('#amt').value));
-      if(!n||n<=0){toast('اكتب مبلغا صحيحا');break;}
-      n=n*Number(el.getAttribute('data-s'));
-      if(s.balance+n<0){toast('الرصيد لا يكفي للخصم');break;}
-      s.balance+=n;
-      s.tx.push({t:n,note:'تعديل من الإدارة',ts:Date.now()});
-      addLog('تعديل رصيد '+s.name+' ('+(n>0?'+':'')+n+' ج.م)');
-      save();manage(id);refreshPane();toast('تم تعديل الرصيد ✓');
-      break;
-    case 'saveNote':
-      s=byId(id);if(!s){break;}
-      s.note=$('#nt').value.trim().slice(0,300);
-      save();refreshPane();toast('تم حفظ الملاحظة ✓');
-      break;
-    case 'addExam':{
-      s=byId(id);if(!s){break;}
-      var t=$('#et').value.trim(),sc=Number($('#es').value),mx=Number($('#em').value);
-      if(!t||$('#es').value===''||!isFinite(sc)||sc<0||!isFinite(mx)||mx<=0||sc>mx){toast('راجع بيانات الاختبار');break;}
-      s.exams.push({id:uid(),title:t,score:sc,max:mx,ts:Date.now()});
-      addLog('درجة جديدة لـ '+s.name+': '+t);
-      save();manage(id);toast('تمت إضافة الدرجة ✓');
-      break;}
-    case 'delExam':
-      s=byId(id);if(!s){break;}
-      s.exams=s.exams.filter(function(e){return e.id!==el.getAttribute('data-e');});
-      save();manage(id);
-      break;
-    case 'delStu':
-      s=byId(id);if(!s){break;}
-      if(!confirm('حذف الطالب "'+s.name+'" نهائيا؟')){break;}
-      db.students=db.students.filter(function(x){return x.id!==id;});
-      addLog('تم حذف الطالب '+s.name);save();refreshPane();toast('تم الحذف');
-      break;
-    case 'mark':{
-      s=byId(id);if(!s){break;}
-      var now=Date.now(),l=lastAtt(s),rec={status:el.getAttribute('data-st'),by:db.session.sup,ts:now};
-      if(l&&dayKey(l.ts)===dayKey(now)){s.att[s.att.length-1]=rec;}else{s.att.push(rec);}
-      addLog(s.name+': '+(rec.status==='present'?'حاضر':'غائب')+' (المشرف '+rec.by+')');
-      save();refreshPane();toast(rec.status==='present'?'تم تسجيل الحضور ✓':'تم تسجيل الغياب');
-      break;}
-    case 'genCodes':{
-      n=Math.max(1,Math.min(50,parseInt($('#cn').value,10)||1));
-      for(var i=0;i<n;i++){db.codes.push({code:genCode(),used:false,ts:Date.now()});}
-      addLog('تم توليد '+n+' كود شحن');save();refreshPane();toast('تم توليد '+n+' كود ✓');
-      break;}
-    case 'copy':copyText(el.getAttribute('data-v'));break;
-    case 'copyAll':{
-      var av=db.codes.filter(function(c){return !c.used;}).map(function(c){return c.code;});
-      if(!av.length){toast('لا توجد أكواد متاحة');break;}
-      copyText(av.join(NL));
-      break;}
-    case 'delVid':
-      if(!confirm('حذف هذه المحاضرة؟')){break;}
-      db.videos=db.videos.filter(function(x){return x.id!==id;});
-      save();refreshPane();toast('تم حذف المحاضرة');
-      break;
-    case 'play':
-      v=db.videos.filter(function(x){return x.id===id;})[0];
-      if(!v){break;}
-      if(!canWatch(v)){toast('المحاضرة مقفولة');break;}
-      openModal('<h3 class="h" style="padding-left:30px">'+esc(v.title)+'</h3><div class="player">'+embed(v.url)+'</div>');
-      break;
-    case 'unlock':
-      s=byId(db.session?db.session.id:'');
-      v=db.videos.filter(function(x){return x.id===id;})[0];
-      if(!s||!v){break;}
-      if(canWatch(v)){act('play',el);break;}
-      if(s.balance<PRICE){toast('رصيدك لا يكفي، اشحن محفظتك أولا');break;}
-      s.balance-=PRICE;s.unlocked.push(v.id);
-      s.tx.push({t:-PRICE,note:'فتح محاضرة: '+v.title,ts:Date.now()});
-      addLog(s.name+' فتح محاضرة '+v.title);
-      save();render();toast('تم فتح المحاضرة ✓');
-      break;
-    case 'pubAnn':{
-      var tx=$('#at').value.trim();
-      if(!tx){toast('اكتب نص الإعلان');break;}
-      db.announce={text:tx.slice(0,500),ts:Date.now()};
-      addLog('تم نشر إعلان عام');save();refreshPane();toast('تم نشر الإعلان ✓');
-      break;}
-    case 'clrAnn':
-      db.announce={text:'',ts:0};save();refreshPane();toast('تمت إزالة الإعلان');
-      break;
-    default:break;
-  }
-}
-document.addEventListener('click',function(e){
-  if(e.target.id==='ov'){closeModal();return;}
-  var t=e.target.closest('[data-act]');
-  if(t){act(t.getAttribute('data-act'),t);}
-});
-document.addEventListener('input',function(e){
-  if(e.target.id==='sq'){
-    q=e.target.value;
-    var l=$('#slist');
-    if(l){l.innerHTML=rows();}
-  }
-});
-
-var forms={
-  studentLogin:function(f){
-    var c=norm(f.elements.fcode.value),p=norm(f.elements.fphone.value),found=null,i;
-    for(i=0;i<db.students.length;i++){
-      if(norm(db.students[i].code)===c&&norm(db.students[i].phone)===p){found=db.students[i];break;}
-    }
-    if(!found){$('#err').textContent='الكود أو رقم الموبايل غير صحيح';return;}
-    db.session={role:'student',id:found.id};save();render();
-  },
-  adminLogin:function(f){
-    if(Date.now()<lockUntil){$('#err').textContent='محاولات كثيرة، انتظر 30 ثانية';return;}
-    var u=f.elements.fu.value.trim(),p=f.elements.fpw.value,sp=f.elements.fsup.value.trim();
-    if(u===ADMIN.user&&p===ADMIN.pass&&sp){
-      fails=0;
-      db.session={role:'admin',sup:sp.slice(0,40)};
-      addLog('دخول المشرف '+sp);save();adminMode=false;tab='dash';render();
-      return;
-    }
-    fails++;
-    if(fails>=5){lockUntil=Date.now()+30000;fails=0;}
-    $('#err').textContent=sp?'بيانات الدخول غير صحيحة':'اكتب اسم المشرف';
-  },
-  recharge:function(f){
-    var s=byId(db.session.id),code=norm(f.elements.fcode.value).toUpperCase(),c=null,i;
-    if(!s){return;}
-    for(i=0;i<db.codes.length;i++){if(db.codes[i].code===code){c=db.codes[i];break;}}
-    if(!c){toast('الكود غير صحيح');return;}
-    if(c.used){toast('هذا الكود مستخدم من قبل');return;}
-    c.used=true;c.by=s.name;c.usedAt=Date.now();
-    s.balance+=PRICE;
-    s.tx.push({t:PRICE,note:'شحن بكود '+c.code,ts:Date.now()});
-    addLog(s.name+' شحن المحفظة بكود '+c.code);
-    save();render();toast('تم الشحن بنجاح +'+PRICE+' ج.م ✓');
-  },
-  addStu:function(f){
-    var n=f.elements.fn.value.trim(),p=norm(f.elements.fp.value),c=norm(f.elements.fc.value)||nextCode();
-    var b=Math.max(0,Math.floor(Number(f.elements.fb.value)||0));
-    if(!n){toast('اكتب اسم الطالب');return;}
-    if(!/^\d{8,15}$/.test(p)){toast('رقم الموبايل غير صحيح');return;}
-    if(db.students.some(function(s){return s.code===c;})){toast('هذا الكود مستخدم لطالب آخر');return;}
-    db.students.push(mkStudent(n.slice(0,60),p,c,b));
-    addLog('تمت إضافة الطالب '+n+' (كود '+c+')');
-    save();closeModal();refreshPane();toast('تمت إضافة الطالب ✓ كوده: '+c);
-  },
-  addVid:function(f){
-    var t=f.elements.ft.value.trim(),u=f.elements.fl.value.trim();
-    var m=u.match(/src=["']([^"']+)["']/i);
-    if(m){u=m[1];}
-    if(!t){toast('اكتب عنوان المحاضرة');return;}
-    if(!/^https?:\/\//i.test(u)){toast('الرابط غير صالح');return;}
-    db.videos.push({id:uid(),title:t.slice(0,100),url:u,ts:Date.now()});
-    addLog('تم نشر محاضرة '+t);
-    save();refreshPane();toast('تم نشر المحاضرة ✓');
-  }
-};
-document.addEventListener('keydown',function(e){
-  if(e.key!=='Enter'||!e.target||e.target.tagName!=='INPUT'){return;}
-  var f=e.target.closest('form[data-form]');
-  if(!f){return;}
-  e.preventDefault();
-  if(forms[f.getAttribute('data-form')]){forms[f.getAttribute('data-form')](f);}
-});
-document.addEventListener('submit',function(e){
-  var f=e.target.closest('form[data-form]');
-  if(!f){return;}
-  e.preventDefault();
-  var h=forms[f.getAttribute('data-form')];
-  if(h){h(f);}
-});
-
-save();
-render();
-})();
-</script>
-</body>
-</html>
+    '<div class=
