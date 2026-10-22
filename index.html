@@ -95,7 +95,7 @@ td{padding:8px;border-bottom:1px solid #e2d3b0;text-align:center;font-size:15px}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 </style>
 
-<!-- Firebase SDKs (v9 Compat) -->
+<!-- Firebase SDKs -->
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 </head>
@@ -105,19 +105,9 @@ td{padding:8px;border-bottom:1px solid #e2d3b0;text-align:center;font-size:15px}
 <div class="toast" id="toast"></div>
 
 <script>
-window.onerror=function(m,s,l){
-  var d=document.createElement('pre');
-  d.style.cssText='position:fixed;z-index:999;top:0;left:0;right:0;background:#fff;color:#c00;padding:10px;direction:ltr;white-space:pre-wrap;font-size:13px';
-  d.textContent='JS error: '+m+' (line '+l+')';
-  document.body.appendChild(d);
-};
-</script>
-
-<script>
 (function(){
 'use strict';
 
-// ⚙️ إعدادات مشروعك الحقيقية على Firebase (qaisar-we)
 var firebaseConfig = {
   apiKey: "AIzaSyAymPTwxTbsI7VVu3KA4En43VA2l32DT_c",
   authDomain: "qaisar-we.firebaseapp.com",
@@ -128,13 +118,17 @@ var firebaseConfig = {
   appId: "1:407525252124:web:e3236467aa93359907d3d9"
 };
 
-var useFirebase = true;
+var useFirebase = false;
 var rtdb = null;
+
 try {
-  firebase.initializeApp(firebaseConfig);
-  rtdb = firebase.database();
+  if (typeof firebase !== 'undefined') {
+    firebase.initializeApp(firebaseConfig);
+    rtdb = firebase.database();
+    useFirebase = true;
+  }
 } catch(e) {
-  useFirebase = false;
+  console.log("Firebase error:", e);
 }
 
 var ADMIN={user:'admin',pass:'Qaisar@2026'};
@@ -187,7 +181,7 @@ function writeRaw(v){try{localStorage.setItem(KEY,v);}catch(e){memStore=v;}}
 
 function processData(d){
   if(!d || typeof d !== 'object'){
-    db.students = [mkStudent('طالب تجريبي','01000000000','1001',0)];
+    db.students = [mkStudent('مهند محمد عنتر','01143563348','1001',0)];
     db.codes = [];
     db.videos = [];
     db.log = [];
@@ -211,9 +205,7 @@ function processData(d){
   refreshPane();
 }
 
-var sessionBackup = null;
 function save(){
-  sessionBackup = db.session;
   var dataToSave = {
     students: db.students,
     codes: db.codes,
@@ -221,34 +213,26 @@ function save(){
     log: db.log,
     announce: db.announce
   };
+  writeRaw(JSON.stringify(dataToSave));
   if(useFirebase && rtdb){
-    rtdb.ref('qaisar_data').set(dataToSave).catch(function(e){
-      writeRaw(JSON.stringify(dataToSave));
-    });
-  } else {
-    writeRaw(JSON.stringify(dataToSave));
+    try {
+      rtdb.ref('qaisar_data').set(dataToSave);
+    } catch(e){}
   }
 }
 
-// الاتصال اللحظي بـ Firebase لضمان مزامنة البيانات بين جميع الموبايلات
+// تحميل كود الأمان المباشر
+var initialLocal = null;
+try { initialLocal = JSON.parse(readRaw()); } catch(e){}
+processData(initialLocal);
+
 if(useFirebase && rtdb){
-  rtdb.ref('qaisar_data').on('value', function(snapshot){
-    var d = snapshot.val();
-    if(!d){
-      processData(null);
-      save();
-    } else {
-      processData(d);
-    }
-  }, function(error){
-    var localData = null;
-    try{ localData = JSON.parse(readRaw()); }catch(e){}
-    processData(localData);
-  });
-} else {
-  var localData = null;
-  try{ localData = JSON.parse(readRaw()); }catch(e){}
-  processData(localData);
+  try {
+    rtdb.ref('qaisar_data').on('value', function(snapshot){
+      var d = snapshot.val();
+      if(d) { processData(d); }
+    });
+  } catch(e){}
 }
 
 function addLog(t){
@@ -324,6 +308,7 @@ function openModal(h){$('#mb').innerHTML=h;$('#ov').hidden=false;}
 function closeModal(){$('#ov').hidden=true;$('#mb').innerHTML='';}
 
 function render(){
+  app=$('#app');
   if(!app) return;
   var s=db.session;
   if(s&&s.role==='admin'){app.innerHTML=adminView();return;}
@@ -408,4 +393,20 @@ function studentView(s){
 function adminView(){
   var tabs=[['dash','📊 الإحصائيات'],['stu','👥 الطلاب'],['att','🗓 الحضور'],['code','🎟 الأكواد'],['vid','🎬 الفيديوهات'],['ann','📢 الإعلانات']];
   return topbar('لوحة الإدارة — المشرف: '+esc(db.session.sup))+
-    '<div class=
+    '<div class="wrap"><nav class="tabs">'+
+    tabs.map(function(t){return '<button data-act="tab" data-t="'+t[0]+'" class="'+(tab===t[0]?'on':'')+'">'+t[1]+'</button>';}).join('')+
+    '</nav><div id="pane">'+pane()+'</div></div>';
+}
+function pane(){
+  switch(tab){
+    case 'stu':return paneStu();
+    case 'att':return paneAtt();
+    case 'code':return paneCode();
+    case 'vid':return paneVid();
+    case 'ann':return paneAnn();
+    default:return paneDash();
+  }
+}
+function stat(i,l,v){return '<div class="card stat"><i>'+i+'</i><b>'+v+'</b><span>'+l+'</span></div>';}
+function paneDash(){
+  var tot=db.students.reduce(f
